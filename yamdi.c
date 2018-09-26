@@ -2336,7 +2336,6 @@ void writeXMLMetadata(FILE *fp, const char *infile, const char *outfile, FLV_t *
 		fprintf(fp, "<creationdate>%.19s, %i</creationdate>\n", asctime(newtime), 1900 + newtime->tm_year);
 		free(newtime);
 	}
-	printf("post\n");
 	fprintf(fp, "<lastkeyframelocation>%" PRIu64 "</lastkeyframelocation>\n", (uint64_t)flv->keyframes.lastkeyframelocation);
 
 	if(flv->options.xmlomitkeyframes == 0) {
