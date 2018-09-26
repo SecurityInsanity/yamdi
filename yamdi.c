@@ -3,7 +3,7 @@
  *
  * Copyright (c) 2007+, Ingo Oppermann
  * All rights reserved.
- * 
+ *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
  *
@@ -31,18 +31,20 @@
  * -----------------------------------------------------------------------------
  *
  * Compile with:
- * gcc yamdi.c -o yamdi -Wall -O2
+ * gcc yamdi.c -o yamdi -Wall -O3
  *
  * -----------------------------------------------------------------------------
  */
 
+#include <inttypes.h>
+#include <errno.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
-#include <inttypes.h>
-#include <errno.h>
 
 #ifdef __MINGW32__
 	#define off_t _off64_t
@@ -114,6 +116,8 @@ typedef struct {
 
 	int hascuepoints;
 	int canseektoend;			// Set to 1 if the last video frame is a keyframe
+
+	time_t mtime; // modified time of the file.
 
 	short hasaudio;
 	struct {
@@ -333,11 +337,6 @@ int main(int argc, char **argv) {
 					flv.options.addaudiokeyframes = 0;
 				}
 				break;
-/*
-			case 'm':
-				flv.options.keepmetadata = 1;
-				break;
-*/
 			case 'M':
 				flv.options.stripmetadata = 1;
 				break;
@@ -465,6 +464,16 @@ int main(int argc, char **argv) {
 			unlink(infile);
 
 		exit(YAMDI_ERROR);
+	}
+
+	// Check for mtime of file.
+	struct stat attr;
+	int res = stat(infile, &attr);
+	if (res < 0) {
+		fprintf(stderr, "Failed to stat input file [ %d ].\n", res);
+		flv.mtime = 0;
+	} else {
+		flv.mtime = (&attr)->st_mtim.tv_sec;
 	}
 
 	// Open the outfile
@@ -1197,6 +1206,21 @@ onmetadatapass:
 	writeBufferFLVScriptDataValueDouble(&b, "filesize", (double)flv->filesize); length++;
 	writeBufferFLVScriptDataValueDouble(&b, "lasttimestamp", (double)flv->lasttimestamp / 1000.0); length++;
 
+	if (flv->mtime == 0) {
+		writeBufferFLVScriptDataValueString(&b, "creationdate", "Unknown");
+	} else {
+		unsigned long duration = flv->lasttimestamp / 1000;
+		unsigned long epoch = flv->mtime - duration;
+		time_t epoch_time_as_time_t  = epoch;
+
+		struct tm *newtime;
+		newtime = localtime(&epoch_time_as_time_t);
+
+		char buff[255];
+		sprintf(buff, "%.19s, %i", asctime(newtime), 1900 + newtime->tm_year);
+		writeBufferFLVScriptDataValueString(&b, "creationdate", buff);
+	}
+
 	if(flv->haskeyframes == 1) {
 		writeBufferFLVScriptDataValueDouble(&b, "lastkeyframetimestamp", (double)flv->keyframes.lastkeyframetimestamp / 1000.0); length++;
 		writeBufferFLVScriptDataValueDouble(&b, "lastkeyframelocation", (double)flv->keyframes.lastkeyframelocation); length++;
@@ -1608,7 +1632,7 @@ int writeBufferFLVScriptDataECMAArray(buffer_t *buffer, const char *name, size_t
 
 int writeBufferFLVScriptDataValueArray(buffer_t *buffer, const char *name, size_t len) {
 	unsigned char type, bytes[4];
-	
+
 	writeBufferFLVScriptDataString(buffer, name);
 
 	type = 10;	// Value Array
@@ -2278,7 +2302,7 @@ void writeXMLMetadata(FILE *fp, const char *infile, const char *outfile, FLV_t *
 	fprintf(fp, "<hasCuePoints>%s</hasCuePoints>\n", (flv->hascuepoints != 0) ? "true" : "false");
 	fprintf(fp, "<canSeekToEnd>%s</canSeekToEnd>\n", (flv->canseektoend != 0) ? "true" : "false");
 
-	fprintf(fp, "<audiocodecid>%d</audiocodecid>\n", flv->audio.codecid);      
+	fprintf(fp, "<audiocodecid>%d</audiocodecid>\n", flv->audio.codecid);
 	fprintf(fp, "<audiosamplerate>%d</audiosamplerate>\n", flv->audio.samplerate);
 	fprintf(fp, "<audiodatarate>%d</audiodatarate>\n", (int)flv->audio.datarate);
 	fprintf(fp, "<audiosamplesize>%d</audiosamplesize>\n", flv->audio.samplesize);
@@ -2299,6 +2323,20 @@ void writeXMLMetadata(FILE *fp, const char *infile, const char *outfile, FLV_t *
 	fprintf(fp, "<lasttimestamp>%.2f</lasttimestamp>\n", (double)flv->lasttimestamp / 1000.0);
 	fprintf(fp, "<lastvideoframetimestamp>%.2f</lastvideoframetimestamp>\n", (double)flv->video.lasttimestamp / 1000.0);
 	fprintf(fp, "<lastkeyframetimestamp>%.2f</lastkeyframetimestamp>\n", (double)flv->keyframes.lastkeyframetimestamp / 1000.0);
+	if (flv->mtime == 0) {
+		fprintf(fp, "<creationdate>Unknown</creationdate>\n");
+	} else {
+		unsigned long duration = flv->lasttimestamp / 1000;
+		unsigned long epoch = flv->mtime - duration;
+		time_t epoch_time_as_time_t  = epoch;
+
+		struct tm *newtime;
+		newtime = localtime(&epoch_time_as_time_t);
+
+		fprintf(fp, "<creationdate>%.19s, %i</creationdate>\n", asctime(newtime), 1900 + newtime->tm_year);
+		free(newtime);
+	}
+	printf("post\n");
 	fprintf(fp, "<lastkeyframelocation>%" PRIu64 "</lastkeyframelocation>\n", (uint64_t)flv->keyframes.lastkeyframelocation);
 
 	if(flv->options.xmlomitkeyframes == 0) {
@@ -2362,11 +2400,6 @@ void printUsage(void) {
 	fprintf(stderr, "\n");
 	fprintf(stderr, "\t-k\tAdd the onLastKeyframe event.\n");
 	fprintf(stderr, "\n");
-/*
-	fprintf(stderr, "\t-m\tLeave the existing metadata intact.\n");
-	fprintf(stderr, "\t\tMetadata that yamdi does not add is left untouched, e.g. onCuepoint.\n");
-	fprintf(stderr, "\n");
-*/
 	fprintf(stderr, "\t-M\tStrip all metadata from the FLV. The -s and -k options will\n");
 	fprintf(stderr, "\t\tbe ignored.\n");
 	fprintf(stderr, "\n");

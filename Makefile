@@ -1,7 +1,7 @@
 # Makefile for yamdi
 
-CC=gcc
-CFLAGS=-O2 -Wall
+CC=clang
+CFLAGS=-O3 -Wall
 
 yamdi: yamdi.c Makefile
 	$(CC) $(CFLAGS) yamdi.c -o yamdi
