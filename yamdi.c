@@ -1220,6 +1220,7 @@ onmetadatapass:
 		sprintf(buff, "%.19s, %i", asctime(newtime), 1900 + newtime->tm_year);
 		writeBufferFLVScriptDataValueString(&b, "creationdate", buff);
 	}
+	length++;
 
 	if(flv->haskeyframes == 1) {
 		writeBufferFLVScriptDataValueDouble(&b, "lastkeyframetimestamp", (double)flv->keyframes.lastkeyframetimestamp / 1000.0); length++;
