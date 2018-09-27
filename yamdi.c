@@ -52,7 +52,7 @@
 #define ftello(stream) ftello64(stream)
 #endif
 
-#define YAMDI_VERSION			"1.9"
+#define YAMDI_VERSION			"1.9.1"
 
 #define YAMDI_OK						0
 #define YAMDI_ERROR						1
@@ -123,7 +123,8 @@ typedef struct {
 	int hascuepoints;
 	int canseektoend;			// Set to 1 if the last video frame is a keyframe
 
-	time_t mtime; // modified time of the file.
+	char creationdate[25];			// asctime formatted
+	time_t mtime;			// time of last data modification, seconds since Epoch
 
 	short hasaudio;
 	struct {
@@ -238,6 +239,8 @@ int analyzeFLVH264VideoPacket(FLV_t *flv, FLVTag_t *flvtag, FILE *fp);
 int analyzeFLVScreenVideoPacket(FLV_t *flv, FLVTag_t *flvtag, FILE *fp);
 int analyzeFLVVP6VideoPacket(FLV_t *flv, FLVTag_t *flvtag, FILE *fp);
 int analyzeFLVVP6AlphaVideoPacket(FLV_t *flv, FLVTag_t *flvtag, FILE *fp);
+
+int calculateCreationDate(char *creationdate, size_t len, time_t mtime, double duration);
 
 int createFLVEvents(FLV_t *flv);
 int createFLVEventOnMetaData(FLV_t *flv);
@@ -490,15 +493,12 @@ int main(int argc, char **argv) {
 		exit(YAMDI_ERROR);
 	}
 
-	// Check for mtime of file.
-	struct stat attr;
-	int res = stat(infile, &attr);
-	if (res < 0) {
-		fprintf(stderr, "Failed to stat input file [ %d ].\n", res);
-		flv.mtime = 0;
-	} else {
-		flv.mtime = (&attr)->st_mtim.tv_sec;
-	}
+	// Check FLV file mtime
+	struct stat statbuf;
+	if(stat(infile, &statbuf) != 0)
+		flv.mtime = -1;
+	else
+		flv.mtime = (&statbuf)->st_mtim.tv_sec;
 
 	// Open the outfile
 	fp_outfile = NULL;
@@ -1153,6 +1153,23 @@ int writeFLVHeader(FILE *fp, int hasaudio, int hasvideo) {
 	return YAMDI_OK;
 }
 
+int calculateCreationDate(char *creationdate, size_t len, time_t mtime, double duration) {
+	if(strlen(creationdate) > 0)
+		return YAMDI_OK;
+
+	if(mtime == -1) {
+		snprintf(creationdate, len, "unknown");
+	} else {
+		struct tm *creationtime;
+		time_t creationepoch = mtime - duration;
+		creationtime = gmtime(&creationepoch);
+
+		snprintf(creationdate, len, "%.24s", asctime(creationtime));
+	}
+
+	return YAMDI_OK;
+}
+
 int createFLVEvents(FLV_t *flv) {
 	if(flv->options.addonmetadata == 1)
 		createFLVEventOnMetaData(flv);
@@ -1188,7 +1205,12 @@ int createFLVEventOnMetaData(FLV_t *flv) {
 			length++;
 		}
 
-		writeBufferFLVScriptDataValueString(&b, "metadatacreator", "Yet Another Metadata Injector for FLV - Version " YAMDI_VERSION "\0");
+		if(calculateCreationDate(flv->creationdate, sizeof(flv->creationdate), flv->mtime, (double)flv->lasttimestamp / 1000.0) == YAMDI_OK) {
+			writeBufferFLVScriptDataValueString(&b, "creationdate", flv->creationdate);
+			length++;
+		}
+
+		writeBufferFLVScriptDataValueString(&b, "metadatacreator", "yamdi " YAMDI_VERSION "\0");
 		length++;
 		writeBufferFLVScriptDataValueBool(&b, "hasKeyframes", flv->haskeyframes);
 		length++;
@@ -1247,25 +1269,11 @@ int createFLVEventOnMetaData(FLV_t *flv) {
 		writeBufferFLVScriptDataValueDouble(&b, "lasttimestamp", (double)flv->lasttimestamp / 1000.0);
 		length++;
 
-	if (flv->mtime == 0) {
-		writeBufferFLVScriptDataValueString(&b, "creationdate", "Unknown");
-	} else {
-		unsigned long duration = flv->lasttimestamp / 1000;
-		unsigned long epoch = flv->mtime - duration;
-		time_t epoch_time_as_time_t  = epoch;
-
-		struct tm *newtime;
-		newtime = localtime(&epoch_time_as_time_t);
-
-		char buff[255];
-		sprintf(buff, "%.19s, %i", asctime(newtime), 1900 + newtime->tm_year);
-		writeBufferFLVScriptDataValueString(&b, "creationdate", buff);
-	}
-	length++;
-
-	if(flv->haskeyframes == 1) {
-		writeBufferFLVScriptDataValueDouble(&b, "lastkeyframetimestamp", (double)flv->keyframes.lastkeyframetimestamp / 1000.0); length++;
-		writeBufferFLVScriptDataValueDouble(&b, "lastkeyframelocation", (double)flv->keyframes.lastkeyframelocation); length++;
+		if(flv->haskeyframes == 1) {
+			writeBufferFLVScriptDataValueDouble(&b, "lastkeyframetimestamp", (double)flv->keyframes.lastkeyframetimestamp / 1000.0);
+			length++;
+			writeBufferFLVScriptDataValueDouble(&b, "lastkeyframelocation", (double)flv->keyframes.lastkeyframelocation);
+			length++;
 
 			writeBufferFLVScriptDataVariableArray(&b, "keyframes");
 			length++;
@@ -2368,6 +2376,9 @@ void writeXMLMetadata(FILE *fp, const char *infile, const char *outfile, FLV_t *
 	else
 		fprintf(fp, "<flv name=\"%s\">\n", infile);
 
+	if(calculateCreationDate(flv->creationdate, sizeof(flv->creationdate), flv->mtime, (double)flv->lasttimestamp / 1000.0) == YAMDI_OK)
+		fprintf(fp, "<creationdate>%s</creationdate>\n", flv->creationdate);
+
 	fprintf(fp, "<hasKeyframes>%s</hasKeyframes>\n", (flv->haskeyframes != 0) ? "true" : "false");
 	fprintf(fp, "<hasVideo>%s</hasVideo>\n", (flv->hasvideo != 0) ? "true" : "false");
 	fprintf(fp, "<hasAudio>%s</hasAudio>\n", (flv->hasaudio != 0) ? "true" : "false");
@@ -2396,19 +2407,6 @@ void writeXMLMetadata(FILE *fp, const char *infile, const char *outfile, FLV_t *
 	fprintf(fp, "<lasttimestamp>%.2f</lasttimestamp>\n", (double)flv->lasttimestamp / 1000.0);
 	fprintf(fp, "<lastvideoframetimestamp>%.2f</lastvideoframetimestamp>\n", (double)flv->video.lasttimestamp / 1000.0);
 	fprintf(fp, "<lastkeyframetimestamp>%.2f</lastkeyframetimestamp>\n", (double)flv->keyframes.lastkeyframetimestamp / 1000.0);
-	if (flv->mtime == 0) {
-		fprintf(fp, "<creationdate>Unknown</creationdate>\n");
-	} else {
-		unsigned long duration = flv->lasttimestamp / 1000;
-		unsigned long epoch = flv->mtime - duration;
-		time_t epoch_time_as_time_t  = epoch;
-
-		struct tm *newtime;
-		newtime = localtime(&epoch_time_as_time_t);
-
-		fprintf(fp, "<creationdate>%.19s, %i</creationdate>\n", asctime(newtime), 1900 + newtime->tm_year);
-		free(newtime);
-	}
 	fprintf(fp, "<lastkeyframelocation>%" PRIu64 "</lastkeyframelocation>\n", (uint64_t)flv->keyframes.lastkeyframelocation);
 
 	if(flv->options.xmlomitkeyframes == 0) {
